@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="sbt: org.nd4j:nd4j-native:1.0.0-beta7:android-x86:jar" external-system-id="SBT">
+    <CLASSES>
+      <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/org/nd4j/nd4j-native/1.0.0-beta7/nd4j-native-1.0.0-beta7-android-x86.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
