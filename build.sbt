@@ -9,9 +9,9 @@ lazy val root = (project in file("."))
 
 libraryDependencies ++= Seq(
   // https://mvnrepository.com/artifact/org.deeplearning4j/dl4j-spark
-  "org.apache.spark" %% "spark-core" % "3.1.2",
-  "org.apache.spark" %% "spark-sql"  % "3.1.2",
-  "org.apache.spark" %% "spark-mllib" % "3.1.2" ,
+  "org.apache.spark" %% "spark-core" % "3.4.3",
+  "org.apache.spark" %% "spark-sql"  % "3.4.3",
+  "org.apache.spark" %% "spark-mllib" % "3.4.3" ,
 
   "org.deeplearning4j" %% "dl4j-spark" % "1.0.0-beta7",
   "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta7",
