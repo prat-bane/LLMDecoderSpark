@@ -87,7 +87,7 @@ object SlidingWindowTokenEmbeddingUtil {
 
     val windowSize = 3
     val stride = 1
-
+    println("tokens "+tokens.mkString(", "))
     // Step 1: Generate sliding windows and targets
     val (inputs, targets) = generateSlidingWindows(tokens, windowSize, stride)
 

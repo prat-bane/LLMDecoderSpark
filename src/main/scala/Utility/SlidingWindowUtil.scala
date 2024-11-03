@@ -1,201 +1,109 @@
 package Utility
 
 import Utility.SlidingWindowTokenEmbeddingUtil.getAllTokenEmbeddings
+import Utility.SparkModelUtil.{WindowedData, buildModelForEmbeddingInputs, computePositionalEmbedding, getEmbeddingForTokenID, tokenizeAndEmbed}
+import com.typesafe.config.{Config, ConfigFactory}
+import metrics.{CustomSparkListener, EpochMetrics}
+import metrics.ModelMetricsCalculator.computeAccuracy
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.api.java.JavaRDD
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.rdd.RDD
+import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted, SparkListenerTaskEnd}
 import org.deeplearning4j.datasets.iterator.impl.ListDataSetIterator
 import org.deeplearning4j.nn.api.OptimizationAlgorithm
 import org.deeplearning4j.nn.conf.layers.recurrent.LastTimeStep
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration
-import org.deeplearning4j.nn.conf.layers.{LSTM, OutputLayer}
+import org.deeplearning4j.nn.conf.layers.{BaseLayer, LSTM, OutputLayer}
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener
+import org.deeplearning4j.spark.api.RDDTrainingApproach
+import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer
+import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster
+import org.deeplearning4j.spark.time.{SystemClockTimeSource, TimeSourceProvider}
+import org.deeplearning4j.util.ModelSerializer
 import org.nd4j.linalg.activations.Activation
 import org.nd4j.linalg.dataset.DataSet
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator
 import org.nd4j.linalg.factory.Nd4j
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.lossfunctions.LossFunctions
-import org.nd4j.linalg.learning.config.Adam
+import org.nd4j.linalg.learning.config.{Adam, Nesterovs, Sgd}
 import org.slf4j.LoggerFactory
 
-import scala.jdk.CollectionConverters._
+import java.io.{BufferedWriter, ByteArrayInputStream, ByteArrayOutputStream, File, FileWriter, OutputStream, OutputStreamWriter}
+import java.lang.management.{ManagementFactory, OperatingSystemMXBean}
+import java.net.URI
+import scala.util.{Failure, Success, Try}
 
+
+@SerialVersionUID(1L)
 object SlidingWindowUtil extends Serializable {
 
   private val logger = LoggerFactory.getLogger(this.getClass)
 
+  val config: Config = ConfigFactory.load()
+
   // Configuration parameters (you can adjust these as needed)
-  val learningRate: Double = 0.001
-  val lstmLayerSize: Int = 128
-  val batchSize: Int = 32
-  val epochs: Int = 10
-
-  /**
-   * Case class representing windowed data with input tokens and target token.
-   *
-   * @param input  Array of input token IDs.
-   * @param target Target token ID.
-   */
-  case class WindowedData(input: Array[Int], target: Int)
-
-  /**
-   * Computes sinusoidal positional embeddings for a given window size and embedding size.
-   *
-   * @param windowSize    The size of the sliding window (sequence length).
-   * @param embeddingSize The size of the embedding vectors.
-   * @return INDArray of positional embeddings with shape (windowSize, embeddingSize).
-   */
-  def computePositionalEmbedding(windowSize: Int, embeddingSize: Int): INDArray = {
-    val positionalEncoding = Nd4j.zeros(windowSize, embeddingSize)
-
-    for (pos <- 0 until windowSize) {
-      for (i <- 0 until embeddingSize) {
-        val angle = pos.toDouble / Math.pow(10000.0, 2.0 * (i / 2).toDouble / embeddingSize)
-        if (i % 2 == 0) {
-          positionalEncoding.putScalar(Array(pos, i), Math.sin(angle))
-        } else {
-          positionalEncoding.putScalar(Array(pos, i), Math.cos(angle))
-        }
-      }
-    }
-
-    positionalEncoding
-  }
-
-  /**
-   * Converts an array of token IDs into their corresponding embedding vectors.
-   *
-   * @param tokens        Array of token IDs.
-   * @param tokenToIndex  Map of token IDs to indices.
-   * @param embeddingsMap Map of token indices to their corresponding embeddings.
-   * @return INDArray of stacked embeddings with shape (windowSize, embeddingSize).
-   */
-  def tokenizeAndEmbed(
-                        tokens: Array[Int],
-                        tokenToIndex: Map[Int, Int],
-                        embeddingsMap: Map[Int, INDArray]
-                      ): INDArray = {
-    // Retrieve embeddings for each token and stack them
-    val embeddingsList = tokens.map { tokenID =>
-      val index = tokenToIndex.getOrElse(tokenID, -1)
-      if (index == -1) {
-        // Handle unknown token by using a zero vector
-        Nd4j.zeros(1, embeddingsMap.head._2.length().toInt)
-      } else {
-        embeddingsMap(index).reshape(1, -1)
-      }
-    }
-
-    // Stack embeddings into an INDArray of shape (windowSize, embeddingSize)
-    Nd4j.vstack(embeddingsList: _*)
-  }
-
-  /**
-   * Retrieves the embedding for a given token ID.
-   *
-   * @param tokenID       The token ID.
-   * @param tokenToIndex  Map of token IDs to indices.
-   * @param embeddingsMap Map of token indices to their corresponding embeddings.
-   * @return The embedding INDArray for the token.
-   */
-  def getEmbeddingForTokenID(
-                              tokenID: Int,
-                              tokenToIndex: Map[Int, Int],
-                              embeddingsMap: Map[Int, INDArray]
-                            ): INDArray = {
-    val index = tokenToIndex.getOrElse(tokenID, -1)
-    if (index == -1) {
-      Nd4j.zeros(1, embeddingsMap.head._2.length().toInt) // Zero vector for unknown token
-    } else {
-      embeddingsMap(index)
-    }
-  }
-
-  /**
-   * Builds the neural network model for embedding inputs.
-   *
-   * @param embeddingSize Size of the embedding vectors.
-   * @return Initialized MultiLayerNetwork model.
-   */
-  def buildModelForEmbeddingInputs(embeddingSize: Int): MultiLayerNetwork = {
-    logger.info(s"Building model with embeddingSize: $embeddingSize")
-    val conf = new NeuralNetConfiguration.Builder()
-      .updater(new Adam(learningRate))
-      .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
-      .list()
-      .layer(0, new LastTimeStep(
-        new LSTM.Builder()
-          .nIn(embeddingSize)
-          .nOut(lstmLayerSize)
-          .activation(Activation.TANH)
-          .build()
-      ))
-      .layer(1, new OutputLayer.Builder(LossFunctions.LossFunction.MSE)
-        .activation(Activation.IDENTITY)
-        .nIn(lstmLayerSize)
-        .nOut(embeddingSize)
-        .build())
-      .build()
-
-    val model = new MultiLayerNetwork(conf)
-    model.init()
-    logger.info("Model initialized successfully")
-    model
-  }
-
-  /**
-   * Trains the neural network model using the provided DataSetIterator.
-   *
-   * @param model           The MultiLayerNetwork model to train.
-   * @param dataSetIterator DataSetIterator containing the training data.
-   */
-  def trainModelWithIterator(model: MultiLayerNetwork, dataSetIterator: DataSetIterator): Unit = {
-    logger.info("Starting model training with positional embeddings...")
-    model.setListeners(new ScoreIterationListener(1))
-
-    for (epoch <- 1 to epochs) {
-      dataSetIterator.reset()
-      model.fit(dataSetIterator)
-      logger.info(s"Epoch $epoch completed")
-    }
-
-    logger.info("Model training completed")
-  }
-
+  val learningRate: Double = config.getDouble("training.learningRate")
+  val lstmLayerSize: Int = config.getInt("model.lstmLayerSize")
+  val batchSize: Int = config.getInt("training.batchSize")
+  val epochs: Int = config.getInt("training.epochs")
+  val windowSize: Int = config.getInt("data.windowSize")
+  val stride: Int = config.getInt("data.stride")
 
   /**
    * Main function demonstrating the complete workflow with Spark parallelization.
    */
   def main(args: Array[String]): Unit = {
+
+    val sparkConf = config.getConfig("spark")
     // Initialize SparkSession
     val spark = SparkSession.builder()
-      .appName("Sliding Window DataSet Creation with Spark")
-      .master("local[*]")
+      .appName("SparkLLM")
+      //.master("local[*]")
+      //.master("spark://192.168.0.101:7077")
+      .appName(sparkConf.getString("appName"))
+      .master(sparkConf.getString("master"))
+      .config("spark.jars", sparkConf.getString("jars"))
+      .config("spark.hadoop.fs.defaultFS", sparkConf.getString("hadoop.fs.defaultFS"))
+      .config("spark.executor.memory", sparkConf.getString("executor.memory"))
+      .config("spark.local.dir", sparkConf.getString("local.dir"))
+      .config("spark.eventLog.dir", sparkConf.getString("eventLog.dir"))
+      .config("spark.rdd.compress", sparkConf.getString("rdd.compress"))
+      .config("spark.io.compression.codec", sparkConf.getString("io.compression.codec"))
       .getOrCreate()
+    val sc = spark.sparkContext
 
-    // Example sentences (each sentence is a sequence of token IDs)
-    val sentences: Array[Array[Int]] = Array(
-      Array(123, 21, 4000, 21, 1013, 3782, 693),
-      Array(456, 789, 1234, 5678, 91011, 1213, 1415, 1617)
-      // Add more sentences as needed
-    )
+    val customSparkListener = new CustomSparkListener()
+    sc.addSparkListener(customSparkListener)
+
+    val inputFilePath = args(0)
+    //"file:///D://IdeaProjects//ScalaRest//src//main//resources//test//text//tokenids.txt"
+
+    val allTokens: Array[Int] = Try(readTokens(inputFilePath,spark)) match {
+      case Success(arr) => arr
+      case Failure(ex) =>
+        println(s"Error reading tokens: ${ex.getMessage}")
+        Array.empty[Int] // Return an empty array in case of failure
+    }
 
     // Generate embeddings and token-to-index mappings
-    // Flatten all tokens to generate unique token IDs
-    val allTokens = sentences.flatten
-    val (embeddingsMap, tokenToIndex) = getAllTokenEmbeddings(allTokens)
+    //val firstTokens = sentences.flatten
+    logger.info("Size:"+allTokens.length)
+    val firstTokens=allTokens.take(10000)
+    val (embeddingsMap, tokenToIndex) = getAllTokenEmbeddings(firstTokens)
 
-    // Define window size and stride
-    val windowSize = 3
-    val stride = 1
+
 
     // Broadcast the embeddingsMap and tokenToIndex to all Spark executors
     val embeddingsBroadcast = spark.sparkContext.broadcast(embeddingsMap)
     val tokenToIndexBroadcast = spark.sparkContext.broadcast(tokenToIndex)
 
     // Parallelize the sentences RDD
-    val sentencesRDD: RDD[Array[Int]] = spark.sparkContext.parallelize(sentences)
+    val sentencesRDD: RDD[Array[Int]] = spark.sparkContext.parallelize(Seq(firstTokens))
 
     // Generate sliding windows using flatMap
     val slidingWindowsRDD: RDD[WindowedData] = sentencesRDD.flatMap { tokens =>
@@ -204,8 +112,8 @@ object SlidingWindowUtil extends Serializable {
         case window if window.length == windowSize + 1 =>
           val inputWindow = window.slice(0, windowSize).toArray
           val target = window(windowSize)
-          println("Windowed data input "+inputWindow.mkString(", "))
-          println("Windowed data target "+ target)
+          logger.debug("Windowed data input "+inputWindow.mkString(", "))
+          logger.debug("Windowed data target "+ target)
           WindowedData(inputWindow, target)
       }
     }
@@ -243,22 +151,236 @@ object SlidingWindowUtil extends Serializable {
 
     // Optional: Print out the shapes of inputs and targets for verification
     dataSets.foreach { ds =>
-      println(s"Input shape: ${ds.getFeatures.shape().mkString("x")}, Target shape: ${ds.getLabels.shape().mkString("x")}")
-      println(ds.getFeatures)
-      println(ds.getLabels)
+      logger.info(s"Input shape: ${ds.getFeatures.shape().mkString("x")}, Target shape: ${ds.getLabels.shape().mkString("x")}")
+      logger.info(ds.getFeatures.toString())
+      logger.info(ds.getLabels.toStringFull)
     }
 
     // Build the neural network model
     val embeddingSize = embeddingsMap.head._2.length().toInt
     val modelWithEmbeddings = buildModelForEmbeddingInputs(embeddingSize)
 
-    // Create DataSetIterator
+ /*   // Create DataSetIterator
     val dataSetIterator: DataSetIterator = new ListDataSetIterator(dataSets.asJava, batchSize)
 
     // Train the model
-    trainModelWithIterator(modelWithEmbeddings, dataSetIterator)
+    trainModelWithIterator(modelWithEmbeddings, dataSetIterator)*/
+
+    // Create the TrainingMaster
+    val tm = new ParameterAveragingTrainingMaster.Builder(batchSize)
+      .averagingFrequency(5)
+      .batchSizePerWorker(batchSize)
+      .workerPrefetchNumBatches(2)
+      //.collectTrainingStats(true)
+     // .rddTrainingApproach(RDDTrainingApproach.Direct)
+     .exportDirectory("hdfs://ip-172-31-18-156.us-east-2.compute.internal:8020/input/spark")// Enable training stats collection
+      .build()
+
+    // Create the SparkDl4jMultiLayer
+    val sparkModel = new SparkDl4jMultiLayer(spark.sparkContext, modelWithEmbeddings, tm)
+
+
+    val metricsBuffer = scala.collection.mutable.ArrayBuffer[EpochMetrics]()
+
+    val Array(trainingDataSetsRDD, validationDataSetsRDD) = dataSetsRDD.randomSplit(Array(0.8, 0.2))
+    logger.info(s"Number of partitions in trainingDataSetsRDD: ${trainingDataSetsRDD.getNumPartitions}")
+    logger.info(s"Number of partitions in validationDataSetsRDD: ${validationDataSetsRDD.getNumPartitions}")
+
+    // Training loop with accuracy computation
+    sparkModel.setListeners(new ScoreIterationListener(10))
+    val modelPathStr: String = config.getString("paths.model")
+    val csvPathStr: String = config.getString("paths.csv")
+
+    val csvHdfsPath: Path = new Path(csvPathStr)
+
+    // Initialize FileSystem with correct HDFS URI
+    val hdfsUri = config.getString("hdfs.uri") // Replace with your HDFS URI
+    val hdfsConf = new Configuration()
+    hdfsConf.set("fs.defaultFS", hdfsUri)
+    val hdfs = FileSystem.get(new URI(hdfsUri), hdfsConf)
+
+    // Initialize the CSV file
+    //val csvHdfsPath = new Path("hdfs://ip-172-31-16-56.us-east-2.compute.internal:8020/input/spark/training_metrics.csv")
+    val hdfsOutputStream = hdfs.create(csvHdfsPath, true)
+    val bw = new BufferedWriter(new OutputStreamWriter(hdfsOutputStream))
+
+    // Write header
+    bw.write("Epoch,TimeStamp,TrainingLoss,TrainingAccuracy,ValidationAccuracy,LearningRate,UsedMemoryMB,TotalMemoryMB,MaxMemoryMB,totalShuffleReadBytes,totalShuffleWriteBytes,maxTaskDuration,minTaskDuration,avgTaskDuration,failedTaskCount\n                         processCpuLoad: Double,\n                         systemCpuLoad: Double\n")
+
+    // Training loop with accuracy computation
+    for (epoch <- 1 to epochs) {
+      customSparkListener.reset()
+      val epochStartTime = System.currentTimeMillis()
+      logger.info(s"Starting epoch $epoch")
+
+      // Fit the model
+      sparkModel.fit(trainingDataSetsRDD)
+      val epochEndTime = System.currentTimeMillis()
+      val epochTimeMs = epochEndTime - epochStartTime
+      logger.info(s"Completed epoch $epoch in ${epochTimeMs} ms")
+
+      // Serialize the model and broadcast it
+      val modelOutputStream = new ByteArrayOutputStream()
+      ModelSerializer.writeModel(sparkModel.getNetwork, modelOutputStream, false)
+      val modelBytes = modelOutputStream.toByteArray
+      val modelBroadcast = spark.sparkContext.broadcast(modelBytes)
+
+      // Evaluate on validation data
+      val validationDataSetsJavaRDD: JavaRDD[DataSet] = validationDataSetsRDD.toJavaRDD()
+      val validationAccuracy = computeAccuracy(modelBroadcast, validationDataSetsJavaRDD, embeddingsBroadcast, tokenToIndexBroadcast)
+      logger.info(s"Epoch $epoch Validation Accuracy: $validationAccuracy")
+
+      // Evaluate on training data
+      val trainingDataSetsJavaRDD: JavaRDD[DataSet] = trainingDataSetsRDD.toJavaRDD()
+      val trainingAccuracy = computeAccuracy(modelBroadcast, trainingDataSetsJavaRDD, embeddingsBroadcast, tokenToIndexBroadcast)
+      logger.info(s"Epoch $epoch Training Accuracy: $trainingAccuracy")
+
+
+      // Compute validation loss
+      val trainingLoss = sparkModel.getScore
+      logger.info(s"Epoch $epoch Validation Loss: $trainingLoss")
+
+
+      // Get the learning rate
+      val conf = sparkModel.getNetwork.getLayerWiseConfigurations
+      val layerConf = conf.getConf(1)
+      val layer = layerConf.getLayer
+
+      val learningRate = layer match {
+        case baseLayer: BaseLayer =>
+          val iUpdater = baseLayer.getIUpdater
+          iUpdater match {
+            case adam: Adam => adam.getLearningRate
+            case sgd: Sgd => sgd.getLearningRate
+            case nesterovs: Nesterovs => nesterovs.getLearningRate
+            case _ => Double.NaN
+          }
+        case _ => Double.NaN
+      }
+      logger.info(s"Current Learning Rate: $learningRate")
+
+
+
+      // Log memory usage
+      val runtime = Runtime.getRuntime
+      val usedMemoryMB = (runtime.totalMemory - runtime.freeMemory) / (1024 * 1024)
+      val totalMemoryMB = runtime.totalMemory / (1024 * 1024)
+      val maxMemoryMB = runtime.maxMemory / (1024 * 1024)
+      logger.info(s"Memory Usage - Used: $usedMemoryMB MB, Total: $totalMemoryMB MB, Max: $maxMemoryMB MB")
+
+      // Collect metrics from customSparkListener
+      val taskMetrics = customSparkListener.taskMetricsData
+      val stageMetrics = customSparkListener.stageMetricsData
+
+      // Compute total shuffle read/write
+      val totalShuffleReadBytes = taskMetrics.map(_.shuffleReadBytes).sum
+      val totalShuffleWriteBytes = taskMetrics.map(_.shuffleWriteBytes).sum
+
+      logger.info(s"Epoch $epoch Total Shuffle Read Bytes: $totalShuffleReadBytes")
+      logger.info(s"Epoch $epoch Total Shuffle Write Bytes: $totalShuffleWriteBytes")
+
+      // Compute task durations
+      val taskDurations = taskMetrics.map(_.duration)
+      val maxTaskDuration = if (taskDurations.nonEmpty) taskDurations.max else 0L
+      val minTaskDuration = if (taskDurations.nonEmpty) taskDurations.min else 0L
+      val avgTaskDuration = if (taskDurations.nonEmpty) taskDurations.sum.toDouble / taskDurations.size else 0.0
+
+      logger.info(s"Epoch $epoch Task Durations - Max: $maxTaskDuration ms, Min: $minTaskDuration ms, Avg: $avgTaskDuration ms")
+
+      // Detect task skew
+      val taskDurationThreshold = avgTaskDuration * 2 // For example
+      val skewedTasks = taskMetrics.filter(_.duration > taskDurationThreshold)
+      if (skewedTasks.nonEmpty) {
+        logger.warn(s"Epoch $epoch Detected ${skewedTasks.size} skewed tasks")
+      }
+
+      // Log failed task count
+      logger.info(s"Epoch $epoch Failed Task Count: ${customSparkListener.failedTaskCount}")
+
+      // CPU utilization (from driver)
+      val osBean = ManagementFactory.getPlatformMXBean(classOf[OperatingSystemMXBean])
+      val processCpuLoad = osBean.getAvailableProcessors
+      val systemCpuLoad = osBean.getSystemLoadAverage
+
+      logger.info(s"Process CPU Load: $processCpuLoad%")
+      logger.info(s"System CPU Load: $systemCpuLoad%")
+
+
+      // Collect metrics
+      val epochMetrics = EpochMetrics(
+        epoch = epoch,
+        timestamp = epochTimeMs,
+        trainingLoss = trainingLoss,
+        trainingAccuracy = trainingAccuracy,
+        validationAccuracy = validationAccuracy,
+        learningRate = learningRate,
+        usedMemoryMB = usedMemoryMB,
+        totalMemoryMB = totalMemoryMB,
+        maxMemoryMB = maxMemoryMB,
+        totalShuffleReadBytes = totalShuffleReadBytes,
+        totalShuffleWriteBytes = totalShuffleWriteBytes,
+        maxTaskDuration = maxTaskDuration,
+        minTaskDuration = minTaskDuration,
+        avgTaskDuration = avgTaskDuration,
+        failedTaskCount = customSparkListener.failedTaskCount,
+        processCpuLoad = processCpuLoad,
+        systemCpuLoad = systemCpuLoad
+      )
+      metricsBuffer += epochMetrics
+
+      // Write metrics to CSV
+      bw.write(s"${epochMetrics.epoch},${epochMetrics.timestamp},${epochMetrics.trainingLoss},${epochMetrics.trainingAccuracy},${epochMetrics.validationAccuracy},${epochMetrics.learningRate},${epochMetrics.usedMemoryMB},${epochMetrics.totalMemoryMB},${epochMetrics.maxMemoryMB},${epochMetrics.totalShuffleReadBytes},${epochMetrics.totalShuffleWriteBytes},${epochMetrics.maxTaskDuration},${epochMetrics.minTaskDuration},${epochMetrics.avgTaskDuration},${epochMetrics.failedTaskCount},${epochMetrics.processCpuLoad},${epochMetrics.systemCpuLoad}\n")
+      bw.flush()
+    }
+
+    // Close the BufferedWriter
+    bw.close()
+
+    // Initialize FileSystem with correct HDFS URI
+    val fs = FileSystem.get(new URI("hdfs://ip-172-31-18-156.us-east-2.compute.internal:8020"), sc.hadoopConfiguration)
+
+    // Define the HDFS path for the model
+    val modelPath: Path = new Path(modelPathStr)
+  //  val modelPath = new Path("hdfs://ip-172-31-16-56.us-east-2.compute.internal:8020/input/spark/trainedModel.zip")
+
+    // Create an OutputStream to HDFS
+    val outputStream: OutputStream = fs.create(modelPath)
+
+    // Save the model to HDFS using the OutputStream
+    // Close the OutputStream
+    //val modelpath="hdfs://localhost:9000/input/spark/model.zip"
+    ModelSerializer.writeModel(sparkModel.getNetwork, outputStream, true)
+    outputStream.close()
+    // Delete temporary files and stop TrainingMaster
+    tm.deleteTempFiles(spark.sparkContext)
 
     // Stop Spark session
     spark.stop()
   }
+
+
+  def readTokens(filename: String, spark: SparkSession): Array[Int] = {
+    val sc = spark.sparkContext
+    val rawRDD = sc.textFile(filename)
+
+    val rawLines = rawRDD.collect()
+    logger.info("Raw lines:")
+    rawLines.foreach(line => logger.info(s"'$line'"))
+    logger.info(s"Total raw lines: ${rawLines.length}")
+
+    val tokensRDD: RDD[Int] = rawRDD
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(line => line.toInt)
+
+    logger.info("File size " + rawRDD.count())
+    logger.info(tokensRDD.collect().mkString(","))
+    tokensRDD.collect()
+  }
 }
+
+
+
+
+
+

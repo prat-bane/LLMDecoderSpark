@@ -1,0 +1,50 @@
+# Ignore the .bloop directory, which is used by Bloop, a Scala build server
+.bloop/
+
+# Ignore the .bsp directory, which is used by BSP (Build Server Protocol)
+.bsp/
+
+# Ignore the .metals directory, which is used by Metals, the Scala language server
+.metals/
+
+# Ignore IntelliJ IDEA project files
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Ignore VS Code project files
+.vscode/
+
+# SBT-specific files
+.project
+.target/
+.history
+.cache/
+.lib/
+dist/
+logs/
+tmp/
+project/target/
+project/project/
+target/
+
+# Log files
+*.log
+
+# OS-specific files (optional but recommended)
+.DS_Store
+Thumbs.db
+
+# Ignore files created by ScalaTest or other testing libraries
+test-reports/
+
+# Package and distribution files
+*.jar
+*.war
+*.zip
+*.tar.gz
+
+# Ignore ScalaDoc output
+docs/

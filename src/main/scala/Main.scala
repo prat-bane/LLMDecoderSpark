@@ -1,32 +1,54 @@
+import com.knuddels.jtokkit.Encodings
+import com.knuddels.jtokkit.api.ModelType
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
+import org.slf4j.{Logger, LoggerFactory}
+
+import java.io.{File, PrintWriter}
+import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
+import scala.util.{Failure, Success, Try, Using}
 
 object Main {
+  val registry = Encodings.newDefaultEncodingRegistry
+  val jtokkitEncoding = registry.getEncodingForModel(ModelType.GPT_4)
+
+  val logger: Logger = LoggerFactory.getLogger(getClass)
+
+  // Initialize the encoding registry and get the encoding for GPT-4
 
   def main(args: Array[String]): Unit = {
+    logger.info("TokenizationApp started.")
 
-    val spark = SparkSession.builder
-      .appName("SlidingWindow")
-      .master("local[*]") // Run locally using all cores
-      .getOrCreate()
+    // Define input and output file paths
+    val inputFilePath = "D:\\IdeaProjects\\ScalaRest\\src\\main\\resources\\test\\text\\tokenids.txt"
 
-    // Step 2: Create an RDD of integers
-    val numbers = Array(123, 21, 4000, 21, 1013, 3782, 693,32,5,53,79,14,11,7,90) // Example list of integers
-    val numbersRDD = spark.sparkContext.parallelize(numbers)
-    // Step 3: Calculate the sum and count of the elements
-    val sum = numbersRDD.sum() // Sum of all elements
-    val count = numbersRDD.count() // Count of elements
 
-    // Step 4: Calculate the average
-    val average = sum / count
+    val tokens: Array[Int] = Try(readTokens(inputFilePath)) match {
+      case Success(arr) => arr
+      case Failure(ex) =>
+        println(s"Error reading tokens: ${ex.getMessage}")
+        Array.empty[Int] // Return an empty array in case of failure
+    }
 
-    // Step 5: Print the result
-    println(s"The average of the numbers is: $average")
-
-    // Step 6: Stop the Spark session
-    spark.stop();
-
+   tokens.foreach(token => println(token))
   }
+
+  def readTokens(filename: String): Array[Int] = {
+    val source = Source.fromFile(filename)
+    try {
+      // Read lines, trim whitespace, filter out empty lines, and convert to Int
+      source.getLines()
+        .map(_.trim)               // Remove leading/trailing whitespace
+        .filter(_.nonEmpty)       // Skip empty lines
+        .map(_.toInt)             // Convert each token to Int
+        .toArray                  // Collect into an Array[Int]
+    } finally {
+      source.close()
+    }
+  }
+
+
 
 }

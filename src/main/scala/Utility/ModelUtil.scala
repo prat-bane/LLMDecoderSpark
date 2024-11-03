@@ -20,9 +20,9 @@ object ModelUtil {
 
   // Configuration parameters (you can adjust these as needed)
   val learningRate: Double = 0.001
-  val lstmLayerSize: Int = 128
+  val lstmLayerSize: Int = 64
   val batchSize: Int = 32
-  val epochs: Int = 10
+  val epochs: Int = 1
   /**
    * Builds the neural network model.
    *
