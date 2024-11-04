@@ -150,10 +150,9 @@ object SlidingWindowUtil extends Serializable {
 
     // Create the TrainingMaster
     val tm = new ParameterAveragingTrainingMaster.Builder(batchSize)
-      .averagingFrequency(5)
+      .averagingFrequency(config.getInt("trainingMaster.avgFreq"))
       .batchSizePerWorker(batchSize)
-      .workerPrefetchNumBatches(2)
-  //   .exportDirectory("hdfs://ip-172-31-18-156.us-east-2.compute.internal:8020/input/spark")// Enable training stats collection
+      .workerPrefetchNumBatches(config.getInt("trainingMaster.workerPreFetchNumBatches"))
       .build()
 
     // Create the SparkDl4jMultiLayer
