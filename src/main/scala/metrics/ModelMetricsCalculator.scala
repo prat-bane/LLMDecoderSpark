@@ -1,5 +1,6 @@
 package metrics
 
+import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.broadcast.Broadcast
 import org.deeplearning4j.util.ModelSerializer
@@ -10,6 +11,8 @@ import java.io.ByteArrayInputStream
 
 object ModelMetricsCalculator {
 
+  val config: Config = ConfigFactory.load()
+  val similarityThreshold =config.getDouble("metrics.similarityThreshold")
   /**
    * Computes the accuracy of the model on the given validation dataset.
    *
@@ -92,7 +95,7 @@ object ModelMetricsCalculator {
     val embeddingVector = embedding.reshape(1, -1)
     var maxSimilarity = Double.MinValue
     var closestTokenID = -1
-    val similarityThreshold =.05
+
     embeddingsMap.foreach { case (index, emb) =>
       val embVector = emb.reshape(1, -1)
       val similarity = cosineSimilarity(embeddingVector, embVector)

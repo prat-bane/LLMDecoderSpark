@@ -48,11 +48,10 @@ object SlidingWindowUtil extends Serializable {
     val sparkConf = config.getConfig("spark")
     // Initialize SparkSession
     val spark = SparkSession.builder()
-      .appName("SparkLLM")
-      .master("local[*]")
+      //.master("local[*]")
       //.master("spark://192.168.0.101:7077")
       .appName(sparkConf.getString("appName"))
-      //.master(sparkConf.getString("master"))
+      .master(sparkConf.getString("master"))
      // .config("spark.jars", sparkConf.getString("jars"))
       //.config("spark.hadoop.fs.defaultFS", sparkConf.getString("hadoop.fs.defaultFS"))
       .config("spark.executor.memory", sparkConf.getString("executor.memory"))
@@ -67,7 +66,7 @@ object SlidingWindowUtil extends Serializable {
     val gradientListener = new GradientStatsListener()
     sc.addSparkListener(customSparkListener)
 
-    val inputFilePath = "D:\\IdeaProjects\\LLMDecoderSpark\\src\\main\\resources\\tokenids.txt"
+    val inputFilePath = args(0) //tokenids.txt file path. It is present in src/main/resources/tokenids.txt
 
 
     val allTokens: Array[Int] = Try(readTokens(inputFilePath,spark)) match {
@@ -78,19 +77,15 @@ object SlidingWindowUtil extends Serializable {
     }
 
     // Generate embeddings and token-to-index mappings
-    //val firstTokens = sentences.flatten
     logger.info("Size:"+allTokens.length)
-    val firstTokens=allTokens.take(200)
-    val (embeddingsMap, tokenToIndex) = getAllTokenEmbeddings(firstTokens)
-
-
+    val (embeddingsMap, tokenToIndex) = getAllTokenEmbeddings(allTokens)
 
     // Broadcast the embeddingsMap and tokenToIndex to all Spark executors
     val embeddingsBroadcast = spark.sparkContext.broadcast(embeddingsMap)
     val tokenToIndexBroadcast = spark.sparkContext.broadcast(tokenToIndex)
 
     // Parallelize the sentences RDD
-    val sentencesRDD: RDD[Array[Int]] = spark.sparkContext.parallelize(Seq(firstTokens))
+    val sentencesRDD: RDD[Array[Int]] = spark.sparkContext.parallelize(Seq(allTokens))
 
     // Generate sliding windows using flatMap
     val slidingWindowsRDD: RDD[WindowedData] = sentencesRDD.flatMap { tokens =>

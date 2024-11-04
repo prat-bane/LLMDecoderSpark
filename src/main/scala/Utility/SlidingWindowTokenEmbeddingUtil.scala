@@ -4,8 +4,11 @@ import Utility.ModelUtil.{buildModel, extractEmbeddings, trainModel}
 import com.typesafe.config.{Config, ConfigFactory}
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
+import org.slf4j.LoggerFactory
 
 object SlidingWindowTokenEmbeddingUtil {
+
+  private val logger = LoggerFactory.getLogger(this.getClass)
 
   val config: Config = ConfigFactory.load()
   val windowSize: Int = config.getInt("data.windowSize")
@@ -90,40 +93,40 @@ object SlidingWindowTokenEmbeddingUtil {
 
   def getAllTokenEmbeddings(tokens:Array[Int]):(Map[Int, INDArray],Map[Int,Int])={
 
-    println("tokens "+tokens.mkString(", "))
+    logger.debug("tokens "+tokens.mkString(", "))
     // Step 1: Generate sliding windows and targets
     val (inputs, targets) = generateSlidingWindows(tokens, windowSize, stride)
 
-    println("Original Input Windows:")
+    logger.debug("Original Input Windows:")
     inputs.foreach(window => println(window.mkString("[", ", ", "]")))
 
-    println("\nOriginal Target Array:")
-    println(targets.mkString("[", ", ", "]"))
+    logger.debug("\nOriginal Target Array:")
+    logger.debug(targets.mkString("[", ", ", "]"))
 
     // Step 2: Map tokens to indices and transform inputs and targets
     val (tokenToIndex, indexedInputs, indexedTargets) = mapTokensToIndices(inputs, targets)
 
-    println("\nToken to Index Mapping:")
+    logger.debug("\nToken to Index Mapping:")
     tokenToIndex.toSeq.sortBy(_._2).foreach { case (token, index) =>
-      println(s"$token : $index")
+      logger.debug(s"$token : $index")
     }
 
-    println("\nIndexed Input Windows:")
+    logger.debug("\nIndexed Input Windows:")
     indexedInputs.foreach(window => println(window.mkString("[", ", ", "]")))
 
-    println("\nIndexed Target Array:")
-    println(indexedTargets.mkString("[", ", ", "]"))
+    logger.debug("\nIndexed Target Array:")
+    logger.debug(indexedTargets.mkString("[", ", ", "]"))
 
     // Step 3: Create training data as INDArrays
     val (inputINDArray, targetINDArray) = createTrainingData(indexedInputs, indexedTargets)
 
-    println("\nInput INDArray Shape: " + inputINDArray.shape().mkString("x"))
-    println("Input INDArray:")
-    println(inputINDArray)
+    logger.debug("\nInput INDArray Shape: " + inputINDArray.shape().mkString("x"))
+    logger.debug("Input INDArray:")
+    logger.debug(inputINDArray.toStringFull)
 
-    println("\nTarget INDArray Shape: " + targetINDArray.shape().mkString("x"))
-    println("Target INDArray:")
-    println(targetINDArray)
+    logger.debug("\nTarget INDArray Shape: " + targetINDArray.shape().mkString("x"))
+    logger.debug("Target INDArray:")
+    logger.debug(targetINDArray.toStringFull)
 
     // Step 4: Build the model
     val vocabSize = tokenToIndex.size + 1 // +1 if using 0 as padding/index
@@ -135,9 +138,9 @@ object SlidingWindowTokenEmbeddingUtil {
 
     // Step 6: Extract embeddings
     val embeddings = extractEmbeddings(model)
-    println("\nExtracted Embeddings:")
+    logger.info("\nExtracted Embeddings:")
     embeddings.foreach { case (index, vector) =>
-      println(s"Index $index: ${vector.toString()}")
+      logger.info(s"Index $index: ${vector.toString()}")
     }
 
     (embeddings,tokenToIndex)

@@ -93,6 +93,7 @@ object SparkModelUtil {
                             ): INDArray = {
     val index = tokenToIndex.getOrElse(tokenID, -1)
     if (index == -1) {
+      logger.debug("No embedding found for token")
       Nd4j.zeros(1, embeddingsMap.head._2.length().toInt) // Zero vector for unknown token
     } else {
       embeddingsMap(index)
