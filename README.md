@@ -9,22 +9,76 @@
 
 The application reads token IDs from a text file, generates embeddings, and trains a neural network model using a sliding window approach. It leverages **Apache Spark** for distributed data processing and DL4J for deep learning tasks.
 
-## Project Workflow
+## Workflow
 
-1. **Sliding Window operation on Tokens**
-   - **Sliding window and token embedding generation**:
-     The input tokens from the token id file(src/main/resources/tokenid.txt) that we generated in hw1 has been used in this project. The token embeddings of those tokens have been calculated and stored in a
-     map.
-    
-   - **Sliding window RDD dataset formation**: RDDs of Sliding window data has been created.
-     
-2. **Positional Embedding Generation and Training Dataset formation**
-   - Positional embeddings of the RDD windowed data from the previous step has been calculated and added to their respective token embeddings to form the input and target embeddings,which forms the training dataset.
-  
+### 1. Sliding Window Operation on Tokens
 
-3. **Model Training**
-   - The model has been trained with the input and output targe embeddings.
-   - **Result**: Model zip and training metrics file.
+**a. Token Embedding Generation**
+
+- **Input**: Token IDs from `src/main/resources/tokenids.txt`.
+- **Process**: Generate embeddings for each token ID and store them in a map for efficient retrieval.
+- **Outcome**: A map linking each token ID to its corresponding embedding vector.
+
+**b. Sliding Window RDD Dataset Formation**
+
+- **Input**: Sequence of token IDs.
+- **Process**:
+  - Parallelize token IDs into an RDD using Spark.
+  - Apply a sliding window of size `windowSize + 1` with a stride of `stride`.
+  - For each window, designate the first `windowSize` tokens as input and the last token as the target.
+- **Outcome**: An RDD containing input-target pairs ready for embedding and model training.
+
+### 2. Positional Embedding Generation and Training Dataset Formation
+
+**a. Positional Embedding Calculation**
+
+- **Purpose**: Incorporate positional information to help the model understand the order of tokens.
+- **Process**:
+  - Compute positional embeddings for each token in the input window.
+  - Add positional embeddings to the corresponding token embeddings to create position-aware embeddings.
+- **Outcome**: Enhanced input embeddings that include both token semantics and positional context.
+
+**b. Training Dataset Formation**
+
+- **Input**: Position-aware embeddings and target token embeddings.
+- **Process**:
+  - Transpose and reshape the input embeddings to match the expected input shape for the LSTM model.
+  - Pair the input embeddings with the target embeddings to form `DataSet` objects.
+- **Outcome**: A training dataset comprising feature-target pairs suitable for model training.
+
+### 3. Model Training
+
+**a. Model Architecture**
+
+- **Components**:
+  - **LSTM Layer**: Captures sequential dependencies in the data.
+  - **Output Layer**: Predicts the embedding of the target token.
+- **Configuration**: Defined using `lstmLayerSize`, `learningRate`, and other hyperparameters from the configuration file.
+
+**b. Distributed Training with Spark**
+
+- **Process**:
+  - Split the dataset into training and validation sets.
+  - Configure `ParameterAveragingTrainingMaster` for distributed training.
+  - Initialize `SparkDl4jMultiLayer` with the model and training master.
+  - Iterate over the specified number of epochs:
+    - Train the model on the training dataset.
+    - Evaluate accuracy on both training and validation datasets.
+    - Collect and log training metrics and system performance data.
+- **Outcome**: A trained LSTM model capable of predicting the next token embedding based on input sequences.
+
+### 4. Results
+
+**a. Model Saving**
+
+- **Process**: Serialize and save the trained model to the specified local path (`paths.model`).
+- **Outcome**: A `.zip` file containing the trained model for future inference or analysis.
+
+**b. Training Metrics File**
+
+- **Process**: Log metrics such as loss, accuracy, gradient statistics, memory usage, and CPU load to a CSV file (`paths.csv`).
+- **Outcome**: A comprehensive record of the training process, facilitating performance monitoring and debugging.
+
 
 ## Getting Started
 
