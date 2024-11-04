@@ -3,7 +3,7 @@
 ### Author : Pratyay Banerjee
 ### Email : pbane8@uic.edu
 
-### Youtube video : [https://youtu.be/QWJDm6ITcMg](https://youtu.be/QWJDm6ITcMg)
+### Youtube video : https://youtu.be/aQjFbMBpGCk
 
 ## Overview
 
@@ -28,7 +28,7 @@ The application reads token IDs from a text file, generates embeddings, and trai
 
 ## Getting Started
 
-#Youtube video Link: https://youtu.be/QWJDm6ITcMg
+#Youtube video Link: [https://youtu.be/QWJDm6ITcMg](https://youtu.be/aQjFbMBpGCk)
 
 ### Prerequisites
 
