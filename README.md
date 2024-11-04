@@ -1,4 +1,4 @@
-# Large Language Model Decoder on AWS EMR
+# Large Language Model Encoder on AWS EMR
 
 ### Author : Pratyay Banerjee
 ### Email : pbane8@uic.edu
@@ -11,32 +11,20 @@ The application reads token IDs from a text file, generates embeddings, and trai
 
 ## Project Workflow
 
-1. **Data Sharding and Tokenization**
-   - **Sharding**:
-     The input text data is divided into smaller, manageable chunks to facilitate parallel processing across the EMR cluster. For sharding we have created the FileSharder class, which is used to shard by number of lines. We have also created a TextPreprocessor class which is used by the TokenizerJob to preproccess the input text. The TextPreproccesor class concats every word in the input text with its position and creates a shard. Classes used: **FileSharder.scala**,**TextPreprocessor.scala**
+1. **Sliding Window operation on Tokens**
+   - **Sliding window and token embedding generation**:
+     The input tokens from the token id file(src/main/resources/tokenid.txt) that we generated in hw1 has been used in this project. The token embeddings of those tokens have been calculated and stored in a
+     map.
     
-   - **Tokenization**: Each shard is tokenized using [Jtokkit](https://github.com/nocduro/jtokkit), an efficient tokenizer for large-scale text data.
-     For Tokenization I have created 2 MapReduce jobs, so please don't confused.\
-     i)The first **MapReduce** job I have created is the **WordToTokenJob**. It is used to generate  **word token frequency**. This was created just to meet the requirement of the first part of the project(frequency requirement). The output of this MapperReducer is not used in the rest of the project. \
-     ii)The second **MapReduce** job for tokenization is the TokenizerJob which has a TokenizerMapper and TokenizerReducer. This uses an input which is preprocessed by the TextPreprocessor i.e he input shards have the positions concatenated with the words. This job generates word and token ids in  same order the input text was in. After completion, this job performs post-processing steps, which include
-     extracting the token ids from the part-r-0000x files(output files of the TokenizerJob), consolidate the token ids and create a **tokenids.txt** file, and then sharding the tokenids.txt file so that it can be
-     fed to the TokenEmbeddingJob to generate vector embedding from these tokens. \
-     Classes used:**WordToTokenJob**,**TokenizerJob**,**TokenizerMapper**,**TokenizerReducer**
+   - **Sliding window RDD dataset formation**: RDDs of Sliding window data has been created.
      
-2. **Token Embedding Generation**
-   - **MapReduce Job**: In the next MapReduce job, we generate embeddings for the tokens consolidated from the previous step.
-   - **TokenEmbeddingMapper**: Processes the tokens, generates the embeddings, passes them to the reducer.
-   - **TokenEmbdeddingReducer**: Averages the embeddings in the `TokenEmbedding` job to create a unified vector representation for each token.
-   Classes used :**TokenEmbeddingJob**,**TokenEmbeddingMapper**,**TokenEmbdeddingReducer**
+2. **Positional Embedding Generation and Training Dataset formation**
+   - Positional embeddings of the RDD windowed data from the previous step has been calculated and added to their respective token embeddings to form the input and target embeddings,which forms the training dataset.
+  
 
-3. **Cosine Similarity Calculation**
-   - **CosineSimilarity Job**: Calculates the cosine similarity of all vector embeddings. The **CosineSimilarityDriver** class adds an allEmbeddings.txt file to the Distributed cache so that all reducers
-     have access to all embedding vectors. I have been manually merging the part-r-0000x files from TokenEmbeddingJob to create an alLEmbeddings.txt file using the command
-     ``` hadoop fs -cat /output/embeddings/part-r-* | hadoop fs -put - /input/cosine/allEmbeddings.txt```
-   - **CosineSimilarityMapper**: Processes the embeddings and passes them to the reducer.
-   - **CosineSimilarityReducer**: The reducer loads the allEmbeddings.txt file from the Distributed cache and then stores it in a Map. Each reducer then computes the cosine similarity of the emebeddings
-     in its input split with all other embeddings stored in the Map.
-   - **Result**: Generates the top 5 similar words for each word based on the cosine similarity scores.
+3. **Model Training**
+   - The model has been trained with the input and output targe embeddings.
+   - **Result**: Model zip and training metrics file.
 
 ## Getting Started
 
@@ -45,7 +33,8 @@ The application reads token IDs from a text file, generates embeddings, and trai
 ### Prerequisites
 
 ```bash
-- Scala (version 2.13.12)
+- Scala (version 2.12.17)
+- Apache Spark (version 3.4.5)
 - Apache Hadoop (version 3.3.4)
 - SBT (Scala Build Tool, version 1.10.1)
 - Java JDK (version 1.8 )
@@ -53,9 +42,8 @@ The application reads token IDs from a text file, generates embeddings, and trai
 ### Installation
 
 1. **Clone the Repository**
-
    ```bash
-   git clone https://github.com/prat-bane/LLM-MapReduce
+   git clone https://github.com/prat-bane/LLMDecoderSpark
    cd project-directory
    ```
 ### Running Tests
@@ -63,63 +51,85 @@ The application reads token IDs from a text file, generates embeddings, and trai
 sbt clean compile test
 ```
 
-### Running Different Mappers and Reducers
+### Running the spark job
 
-#### Argument variables can be set in Intellij Run Configurations while running locally.
-
-1) WordToTokenJob : It accepts 2 arguments. The first one is the path to the input shards, the second one is the output path. The input shard has to be created using the **FileSharder** class shardByLines method. FileSharder also has a main method. The shardByLines accepts inputPath,outputPath,number of lines per shard and a flag variable called skipPreprocessing. This flag variable is there because this method is used for sharding input text file for WordToTokenJob as well as sharding the tokenids.txt file,created by TokenizerJob. Sharding the tokenids.txt does not need preprocessing so the flag remains true for it.
-   ```hadoop jar \path\to\jar  mapreduce.WordToTokenJob /input/shards /output/wordcount```
-3) TokenizerJob : It accepts 6 arguments.\
-   i) Input path (path to shards processed by TexTtProcessor class) \
-   ii) Output path\
-   iii) number of reducers\
-   iv) Output path for creating tokenids.txt(a file which contains just the token ids extracted from the part-r-0000x files of this job)\
-   v) Output path for the shards of tokenids.txt (tokenids.txt will be sharded so that it can be fed to TokenEmbeeding job to generate vector embeddings)\
-   vi)Number of lines per shard\
-   Sample Config(pass this as args. Set it in Intellij run config):
-```E:\text\shards D:\IdeaProjects\ScalaRest\src\main\resources\test\text\output 4 D:\IdeaProjects\ScalaRest\src\main\resources\test\text\tokenids.txt D:\IdeaProjects\ScalaRest\src\main\resources\test\text\tokens\output 30000```
-5) TokenEmbeddingJob : It accepts 2 arguments. The input path and the output path. The input path will be the path from point v) of 2.TokenizerJob(previous pt) i.e the output path of shards of tokenids.txt\
- ```D:\IdeaProjects\ScalaRest\src\main\resources\test\text\tokens\output D:\IdeaProjects\ScalaRest\src\main\resources\test\embedding\output```
-6) CosineSimilarityDriver. It accepts 3 arguments. The input path(the output path of TokenEmbeddingJob i.e the previous job), output path, and the path to allEmbeddings.txt(the file mergeed from the part-r-0000x files of TokenEmbeddingJob)
-   ```hadoop jar /path/to/jar mapreduce.CosineSimilarityDriver /output/embedding /output/cosine path/to/allEmbeddings.txt```
+1) Run the SlidingWindowUtil class.
+   
 
 #### Configuration file
 ```
-app{
-
-    embedding-config {
-      window-size = 8
-      stride = 2
-      embedding-size = 100
-      lstm-layer-size = 128
-      learning-rate = 0.001
-      epochs = 500
-      batch-size = 32
-    }
-
-    cosine-similarity{
-       topN = 5
-    }
-
+training {
+  learningRate = 0.001
+  batchSize = 32
+  epochs = 10
 }
+
+model {
+  lstmLayerSize = 64
+}
+
+spark {
+  appName = "Spark LLM"
+  master = "yarn"
+  jars = "s3://sparkllmbucket/jar/LLMDecoderSpark-assembly-0.1.0-SNAPSHOT.jar"
+  hadoop {
+    fs {
+      defaultFS = "hdfs://localhost:9000"
+    }
+  }
+  executor {
+    memory = "4g"
+  }
+  local {
+    dir = "hdfs://localhost:9000/spark/tmp"
+  }
+  eventLog {
+    dir = "hdfs://localhost:9000/spark/events"
+  }
+  rdd {
+    compress = "true"
+  }
+  io {
+    compression {
+      codec = "lz4"
+    }
+  }
+}
+
+hdfs {
+  uri = "hdfs://localhost:9000/"
+}
+
+paths {
+  model = "src/main/resources/trainedModel.zip"
+  csv = "src/main/resources/training_metrics.csv"
+}
+
+data {
+  windowSize = 64
+  stride = 32
+}
+
 ```
 
 ### General Configuration
 
-| **Variable**      | **Default Value** | **Description**                                                                                                                                                                 |
-|-------------------|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `window-size`     | `8`                | **Purpose:** Defines the size of the sliding window used during tokenization or context windowing. <br> **Impact:** Determines how many tokens are considered together, affecting contextual understanding and computational load. A larger window size captures more context but requires more resources. |
-| `stride`          | `2`                | **Purpose:** Specifies the step size by which the sliding window moves across the dataset. <br> **Impact:** Controls the overlap between windows. Smaller strides increase coverage and redundancy, enhancing learning but increasing processing time. |
-| `embedding-size`  | `100`              | **Purpose:** Sets the dimensionality of the vector embeddings generated for each token. <br> **Impact:** Higher embedding sizes capture more nuanced semantic relationships but demand more memory and computational power. Balances representation richness with resource utilization. |
-| `lstm-layer-size` | `128`              | **Purpose:** Determines the number of units (neurons) in each Long Short-Term Memory (LSTM) layer of the neural network. <br> **Impact:** Affects the model's capacity to learn complex patterns and dependencies in the data. Larger sizes enhance learning capability but increase the risk of overfitting and computational requirements. |
-| `learning-rate`   | `0.001`            | **Purpose:** Controls the step size for updating model parameters during training. <br> **Impact:** Balances convergence speed and training stability. A learning rate that's too high can cause overshooting of minima, while too low a rate can result in slow convergence. Finding an optimal learning rate is essential for effective training. |
-| `epochs`          | `500`              | **Purpose:** Specifies the number of complete passes through the entire training dataset. <br> **Impact:** More epochs allow the model to learn more from the data, potentially improving accuracy. However, excessive epochs can lead to overfitting, where the model performs well on training data but poorly on unseen data. |
-| `batch-size`      | `32`               | **Purpose:** Determines the number of samples processed before updating the model's internal parameters. <br> **Impact:** Affects training stability and computational efficiency. Larger batch sizes make better use of parallel hardware (e.g., GPUs) but require more memory. Optimal batch sizes balance memory usage with the quality of gradient estimates. |
+## Configuration Parameters
 
-### Cosine Similarity Configuration
-
-| **Variable**                 | **Default Value** | **Description**                                                                                                                                                         |
-|------------------------------|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `cosine-similarity.topN`     | `5`               | **Purpose:** Specifies the number of top semantically similar words to retain for each target word based on cosine similarity scores. <br> **Impact:** Determines the breadth of similarity results. Higher values provide more related words but increase computational load during similarity calculations. Ideal for applications requiring a comprehensive set of related terms. |
-
-
+| **Variable**                   | **Default Value**                                | **Description**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|--------------------------------|--------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `window-size`                  | `64`                                             | **Purpose:** Defines the size of the sliding window used during data preparation. <br> **Impact:** Determines how many tokens are considered together, affecting the model's ability to learn from sequential data. A larger window size captures more context, allowing the model to learn longer-term dependencies, but it increases computational load and memory usage.                                                                                                                |
+| `stride`                       | `32`                                             | **Purpose:** Specifies the step size by which the sliding window moves across the dataset. <br> **Impact:** Controls the overlap between consecutive windows. Smaller strides result in more overlapping windows, increasing the number of training samples and potentially improving the model's learning but also increasing processing time and resource consumption.                                                                                |
+| `lstm-layer-size`              | `64`                                             | **Purpose:** Determines the number of units (neurons) in the LSTM layer of the neural network. <br> **Impact:** Affects the model's capacity to learn complex patterns and dependencies in the data. Larger sizes enhance the model's expressive power but increase the risk of overfitting and require more computational resources for training and inference.                                                                                                                             |
+| `learning-rate`                | `0.001`                                          | **Purpose:** Controls the step size for updating model parameters during training. <br> **Impact:** Balances convergence speed and training stability. A learning rate that's too high can cause the model to overshoot minima, leading to divergence, while too low a rate can result in slow convergence and getting stuck in suboptimal solutions. Finding an optimal learning rate is essential for effective training.                                                        |
+| `epochs`                       | `10`                                             | **Purpose:** Specifies the number of complete passes through the entire training dataset. <br> **Impact:** More epochs allow the model to learn more from the data, potentially improving accuracy. However, excessive epochs can lead to overfitting, where the model learns the training data too well and performs poorly on unseen data. It's important to monitor performance on a validation set to determine the appropriate number of epochs.                                         |
+| `batch-size`                   | `32`                                             | **Purpose:** Determines the number of samples processed before updating the model's internal parameters. <br> **Impact:** Affects training stability and computational efficiency. Larger batch sizes can make better use of parallel hardware and lead to faster training times but require more memory. Smaller batch sizes provide more frequent updates but can result in noisier gradient estimates.                                               |
+| `embedding-size`               | *(Defined elsewhere)*                            | **Purpose:** Sets the dimensionality of the vector embeddings generated for each token. <br> **Impact:** Higher embedding sizes capture more nuanced semantic relationships but demand more memory and computational power. Balances representation richness with resource utilization. Although not specified in `application.conf`, this parameter is crucial for defining the embedding layer's output size.                                         |
+| `spark.appName`                | `"Spark LLM"`                                    | **Purpose:** Specifies the name of the Spark application. <br> **Impact:** Used for identification in the Spark UI and logs, helping in monitoring and debugging. A meaningful application name makes it easier to track and manage multiple jobs in a cluster environment.                                                                                                                                                                  |
+| `spark.master`                 | `"yarn"`                                         | **Purpose:** Defines the master URL for the Spark cluster. <br> **Impact:** Determines where the Spark application will run. Setting it to `"yarn"` allows the application to run on a Hadoop YARN cluster. Changing this to `"local[*]"` runs the application locally, which is useful for development and testing but not suitable for large-scale data processing.                                                                               |
+| `spark.executor.memory`        | `"4g"`                                           | **Purpose:** Allocates memory per executor process in Spark. <br> **Impact:** Affects the application's ability to handle larger datasets and perform computations efficiently. Insufficient memory may lead to out-of-memory errors, while excessive allocation can waste resources. Balancing executor memory is essential for optimal performance.                                                                                                   |
+| `spark.rdd.compress`           | `"true"`                                         | **Purpose:** Enables compression of serialized RDD partitions. <br> **Impact:** Reduces the amount of memory and disk space used by RDDs, potentially improving performance when network and disk I/O are bottlenecks. However, compression adds CPU overhead, so the benefits depend on the specific workload and cluster configuration.                                                                                                        |
+| `spark.io.compression.codec`   | `"lz4"`                                          | **Purpose:** Specifies the codec used for compressing internal data in Spark. <br> **Impact:** Affects the speed and efficiency of data compression and decompression. The `"lz4"` codec offers a good balance between compression speed and ratio, benefiting applications where I/O performance is critical. Selecting the appropriate codec can optimize resource utilization.                                                                |
+| `hdfs.uri`                     | `"hdfs://localhost:9000/"`                       | **Purpose:** Defines the base URI for the Hadoop Distributed File System (HDFS). <br> **Impact:** Determines where the application reads input data from and writes output data to. Correct configuration is essential for successful data access and storage operations in a distributed environment.                                                                                                                                    |
+| `paths.model`                  | `"src/main/resources/trainedModel.zip"`          | **Purpose:** Specifies the local path where the trained model will be saved. <br> **Impact:** Allows the user to locate and load the trained model for inference or further analysis. Ensure that the path is writable and that sufficient storage space is available.                                                                                                                                 |
+| `paths.csv`                    | `"src/main/resources/training_metrics.csv"`      | **Purpose:** Specifies the local path where the training metrics CSV file will be saved. <br> **Impact:** Enables tracking and analysis of training performance over epochs. Access to this file is important for diagnosing training issues and improving model performance.                                                                                                                         |
