@@ -1,4 +1,4 @@
-# Large Language Model Encoder on AWS EMR
+# Large Language Model Decoder on AWS EMR
 
 ### Author : Pratyay Banerjee
 ### Email : pbane8@uic.edu
