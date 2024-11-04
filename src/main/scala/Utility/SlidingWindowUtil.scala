@@ -3,33 +3,19 @@ package Utility
 import Utility.SlidingWindowTokenEmbeddingUtil.getAllTokenEmbeddings
 import Utility.SparkModelUtil.{WindowedData, buildModelForEmbeddingInputs, computePositionalEmbedding, getEmbeddingForTokenID, tokenizeAndEmbed}
 import com.typesafe.config.{Config, ConfigFactory}
-import metrics.{CustomSparkListener, EpochMetrics}
+import metrics.{CustomSparkListener, EpochMetrics, GradientStatsListener}
 import metrics.ModelMetricsCalculator.computeAccuracy
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.api.java.JavaRDD
-import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.rdd.RDD
-import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted, SparkListenerTaskEnd}
-import org.deeplearning4j.datasets.iterator.impl.ListDataSetIterator
-import org.deeplearning4j.nn.api.OptimizationAlgorithm
-import org.deeplearning4j.nn.conf.layers.recurrent.LastTimeStep
-import org.deeplearning4j.nn.conf.NeuralNetConfiguration
-import org.deeplearning4j.nn.conf.layers.{BaseLayer, LSTM, OutputLayer}
-import org.deeplearning4j.nn.multilayer.MultiLayerNetwork
+import org.deeplearning4j.nn.conf.layers.BaseLayer
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener
-import org.deeplearning4j.spark.api.RDDTrainingApproach
 import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster
-import org.deeplearning4j.spark.time.{SystemClockTimeSource, TimeSourceProvider}
 import org.deeplearning4j.util.ModelSerializer
-import org.nd4j.linalg.activations.Activation
 import org.nd4j.linalg.dataset.DataSet
-import org.nd4j.linalg.dataset.api.iterator.DataSetIterator
-import org.nd4j.linalg.factory.Nd4j
-import org.nd4j.linalg.api.ndarray.INDArray
-import org.nd4j.linalg.lossfunctions.LossFunctions
 import org.nd4j.linalg.learning.config.{Adam, Nesterovs, Sgd}
 import org.slf4j.LoggerFactory
 
@@ -63,25 +49,26 @@ object SlidingWindowUtil extends Serializable {
     // Initialize SparkSession
     val spark = SparkSession.builder()
       .appName("SparkLLM")
-      //.master("local[*]")
+      .master("local[*]")
       //.master("spark://192.168.0.101:7077")
       .appName(sparkConf.getString("appName"))
-      .master(sparkConf.getString("master"))
-      .config("spark.jars", sparkConf.getString("jars"))
-      .config("spark.hadoop.fs.defaultFS", sparkConf.getString("hadoop.fs.defaultFS"))
+      //.master(sparkConf.getString("master"))
+     // .config("spark.jars", sparkConf.getString("jars"))
+      //.config("spark.hadoop.fs.defaultFS", sparkConf.getString("hadoop.fs.defaultFS"))
       .config("spark.executor.memory", sparkConf.getString("executor.memory"))
-      .config("spark.local.dir", sparkConf.getString("local.dir"))
-      .config("spark.eventLog.dir", sparkConf.getString("eventLog.dir"))
+     // .config("spark.local.dir", sparkConf.getString("local.dir"))
+      //.config("spark.eventLog.dir", sparkConf.getString("eventLog.dir"))
       .config("spark.rdd.compress", sparkConf.getString("rdd.compress"))
       .config("spark.io.compression.codec", sparkConf.getString("io.compression.codec"))
       .getOrCreate()
     val sc = spark.sparkContext
 
     val customSparkListener = new CustomSparkListener()
+    val gradientListener = new GradientStatsListener()
     sc.addSparkListener(customSparkListener)
 
-    val inputFilePath = args(0)
-    //"file:///D://IdeaProjects//ScalaRest//src//main//resources//test//text//tokenids.txt"
+    val inputFilePath = "D:\\IdeaProjects\\LLMDecoderSpark\\src\\main\\resources\\tokenids.txt"
+
 
     val allTokens: Array[Int] = Try(readTokens(inputFilePath,spark)) match {
       case Success(arr) => arr
@@ -93,7 +80,7 @@ object SlidingWindowUtil extends Serializable {
     // Generate embeddings and token-to-index mappings
     //val firstTokens = sentences.flatten
     logger.info("Size:"+allTokens.length)
-    val firstTokens=allTokens.take(10000)
+    val firstTokens=allTokens.take(200)
     val (embeddingsMap, tokenToIndex) = getAllTokenEmbeddings(firstTokens)
 
 
@@ -171,9 +158,7 @@ object SlidingWindowUtil extends Serializable {
       .averagingFrequency(5)
       .batchSizePerWorker(batchSize)
       .workerPrefetchNumBatches(2)
-      //.collectTrainingStats(true)
-     // .rddTrainingApproach(RDDTrainingApproach.Direct)
-     .exportDirectory("hdfs://ip-172-31-18-156.us-east-2.compute.internal:8020/input/spark")// Enable training stats collection
+  //   .exportDirectory("hdfs://ip-172-31-18-156.us-east-2.compute.internal:8020/input/spark")// Enable training stats collection
       .build()
 
     // Create the SparkDl4jMultiLayer
@@ -187,25 +172,32 @@ object SlidingWindowUtil extends Serializable {
     logger.info(s"Number of partitions in validationDataSetsRDD: ${validationDataSetsRDD.getNumPartitions}")
 
     // Training loop with accuracy computation
-    sparkModel.setListeners(new ScoreIterationListener(10))
+    sparkModel.setListeners(new ScoreIterationListener(10),gradientListener)
     val modelPathStr: String = config.getString("paths.model")
     val csvPathStr: String = config.getString("paths.csv")
 
-    val csvHdfsPath: Path = new Path(csvPathStr)
+    //val csvHdfsPath: Path = new Path(csvPathStr)
 
     // Initialize FileSystem with correct HDFS URI
-    val hdfsUri = config.getString("hdfs.uri") // Replace with your HDFS URI
+   /* val hdfsUri = config.getString("hdfs.uri") // Replace with your HDFS URI
     val hdfsConf = new Configuration()
     hdfsConf.set("fs.defaultFS", hdfsUri)
-    val hdfs = FileSystem.get(new URI(hdfsUri), hdfsConf)
+    val hdfs = FileSystem.get(new URI(hdfsUri), hdfsConf)*/
+
+    // Adjust paths to local file system
+    val csvLocalPath: String = csvPathStr
+    val modelLocalPath: String = modelPathStr
+
+    // Initialize the CSV file locally
+    val bw = new BufferedWriter(new FileWriter(csvLocalPath))
 
     // Initialize the CSV file
     //val csvHdfsPath = new Path("hdfs://ip-172-31-16-56.us-east-2.compute.internal:8020/input/spark/training_metrics.csv")
-    val hdfsOutputStream = hdfs.create(csvHdfsPath, true)
-    val bw = new BufferedWriter(new OutputStreamWriter(hdfsOutputStream))
+   /* val hdfsOutputStream = hdfs.create(csvHdfsPath, true) buffered writer to write it on hdfs
+    val bw = new BufferedWriter(new OutputStreamWriter(hdfsOutputStream))*/
 
     // Write header
-    bw.write("Epoch,TimeStamp,TrainingLoss,TrainingAccuracy,ValidationAccuracy,LearningRate,UsedMemoryMB,TotalMemoryMB,MaxMemoryMB,totalShuffleReadBytes,totalShuffleWriteBytes,maxTaskDuration,minTaskDuration,avgTaskDuration,failedTaskCount\n                         processCpuLoad: Double,\n                         systemCpuLoad: Double\n")
+    bw.write("Epoch,TimeStamp,TrainingLoss,TrainingAccuracy,ValidationAccuracy,meanGradientMagnitude,maxGradientMagnitude,minGradientMagnitude,gradientVariance,LearningRate,UsedMemoryMB,TotalMemoryMB,MaxMemoryMB,totalShuffleReadBytes,totalShuffleWriteBytes,maxTaskDuration,minTaskDuration,avgTaskDuration,failedTaskCount,processCpuLoad,systemCpuLoad\n")
 
     // Training loop with accuracy computation
     for (epoch <- 1 to epochs) {
@@ -239,6 +231,12 @@ object SlidingWindowUtil extends Serializable {
       // Compute validation loss
       val trainingLoss = sparkModel.getScore
       logger.info(s"Epoch $epoch Validation Loss: $trainingLoss")
+
+      val gradientStats = gradientListener.getGradientStats
+      val meanGradientMagnitude = gradientStats.getOrElse("meanMagnitude",0.0)
+      val maxGradientMagnitude = gradientStats.getOrElse("maxMagnitude",0.0)
+      val minGradientMagnitude = gradientStats.getOrElse("minMagnitude",0.0)
+      val gradientVariance = gradientStats.getOrElse("variance",0.0)
 
 
       // Get the learning rate
@@ -313,6 +311,10 @@ object SlidingWindowUtil extends Serializable {
         trainingLoss = trainingLoss,
         trainingAccuracy = trainingAccuracy,
         validationAccuracy = validationAccuracy,
+        meanGradientMagnitude = meanGradientMagnitude,
+        maxGradientMagnitude = maxGradientMagnitude,
+        minGradientMagnitude = minGradientMagnitude,
+        gradientVariance = gradientVariance,
         learningRate = learningRate,
         usedMemoryMB = usedMemoryMB,
         totalMemoryMB = totalMemoryMB,
@@ -329,7 +331,7 @@ object SlidingWindowUtil extends Serializable {
       metricsBuffer += epochMetrics
 
       // Write metrics to CSV
-      bw.write(s"${epochMetrics.epoch},${epochMetrics.timestamp},${epochMetrics.trainingLoss},${epochMetrics.trainingAccuracy},${epochMetrics.validationAccuracy},${epochMetrics.learningRate},${epochMetrics.usedMemoryMB},${epochMetrics.totalMemoryMB},${epochMetrics.maxMemoryMB},${epochMetrics.totalShuffleReadBytes},${epochMetrics.totalShuffleWriteBytes},${epochMetrics.maxTaskDuration},${epochMetrics.minTaskDuration},${epochMetrics.avgTaskDuration},${epochMetrics.failedTaskCount},${epochMetrics.processCpuLoad},${epochMetrics.systemCpuLoad}\n")
+      bw.write(s"${epochMetrics.epoch},${epochMetrics.timestamp},${epochMetrics.trainingLoss},${epochMetrics.trainingAccuracy},${epochMetrics.validationAccuracy},${epochMetrics.meanGradientMagnitude},${epochMetrics.maxGradientMagnitude},${epochMetrics.minGradientMagnitude},${epochMetrics.gradientVariance},${epochMetrics.learningRate},${epochMetrics.usedMemoryMB},${epochMetrics.totalMemoryMB},${epochMetrics.maxMemoryMB},${epochMetrics.totalShuffleReadBytes},${epochMetrics.totalShuffleWriteBytes},${epochMetrics.maxTaskDuration},${epochMetrics.minTaskDuration},${epochMetrics.avgTaskDuration},${epochMetrics.failedTaskCount},${epochMetrics.processCpuLoad},${epochMetrics.systemCpuLoad}\n")
       bw.flush()
     }
 
@@ -337,20 +339,22 @@ object SlidingWindowUtil extends Serializable {
     bw.close()
 
     // Initialize FileSystem with correct HDFS URI
-    val fs = FileSystem.get(new URI("hdfs://ip-172-31-18-156.us-east-2.compute.internal:8020"), sc.hadoopConfiguration)
+  //  val fs = FileSystem.get(new URI(hdfsUri), sc.hadoopConfiguration)
 
     // Define the HDFS path for the model
-    val modelPath: Path = new Path(modelPathStr)
+  /*  val modelPath: Path = new Path(modelPathStr)
   //  val modelPath = new Path("hdfs://ip-172-31-16-56.us-east-2.compute.internal:8020/input/spark/trainedModel.zip")
 
     // Create an OutputStream to HDFS
-    val outputStream: OutputStream = fs.create(modelPath)
+    val outputStream: OutputStream = fs.create(modelPath)*/
 
     // Save the model to HDFS using the OutputStream
     // Close the OutputStream
     //val modelpath="hdfs://localhost:9000/input/spark/model.zip"
-    ModelSerializer.writeModel(sparkModel.getNetwork, outputStream, true)
-    outputStream.close()
+    val modelFile = new File(modelLocalPath)
+    ModelSerializer.writeModel(sparkModel.getNetwork, modelFile, true)
+  /*  ModelSerializer.writeModel(sparkModel.getNetwork, outputStream, true)
+    outputStream.close()*/
     // Delete temporary files and stop TrainingMaster
     tm.deleteTempFiles(spark.sparkContext)
 

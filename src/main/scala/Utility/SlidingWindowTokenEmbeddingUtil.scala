@@ -1,10 +1,15 @@
 package Utility
 
 import Utility.ModelUtil.{buildModel, extractEmbeddings, trainModel}
+import com.typesafe.config.{Config, ConfigFactory}
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
 
 object SlidingWindowTokenEmbeddingUtil {
+
+  val config: Config = ConfigFactory.load()
+  val windowSize: Int = config.getInt("data.windowSize")
+  val stride: Int = config.getInt("data.stride")
 
   /**
    * Generates sliding windows and corresponding target elements from token IDs.
@@ -85,8 +90,6 @@ object SlidingWindowTokenEmbeddingUtil {
 
   def getAllTokenEmbeddings(tokens:Array[Int]):(Map[Int, INDArray],Map[Int,Int])={
 
-    val windowSize = 3
-    val stride = 1
     println("tokens "+tokens.mkString(", "))
     // Step 1: Generate sliding windows and targets
     val (inputs, targets) = generateSlidingWindows(tokens, windowSize, stride)

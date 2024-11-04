@@ -1,6 +1,6 @@
 package Utility
 
-import Utility.SlidingWindowUtil.{batchSize, learningRate, logger, lstmLayerSize}
+import Utility.SlidingWindowUtil.{batchSize, config, learningRate, logger, lstmLayerSize}
 import org.deeplearning4j.datasets.iterator.impl.ListDataSetIterator
 import org.deeplearning4j.nn.conf.{NeuralNetConfiguration, RNNFormat}
 import org.deeplearning4j.nn.conf.layers.{EmbeddingSequenceLayer, LSTM, RnnOutputLayer}
@@ -18,11 +18,12 @@ object ModelUtil {
 
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  // Configuration parameters (you can adjust these as needed)
-  val learningRate: Double = 0.001
-  val lstmLayerSize: Int = 64
-  val batchSize: Int = 32
-  val epochs: Int = 1
+  val learningRate: Double = config.getDouble("training.learningRate")
+  val lstmLayerSize: Int = config.getInt("model.lstmLayerSize")
+  val batchSize: Int = config.getInt("training.batchSize")
+  val epochs: Int = config.getInt("training.epochs")
+
+
   /**
    * Builds the neural network model.
    *

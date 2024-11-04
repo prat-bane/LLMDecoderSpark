@@ -42,7 +42,7 @@ libraryDependencies ++= Seq(
   "org.slf4j" % "slf4j-simple" % "2.0.13",
   "com.typesafe" % "config" % "1.4.3",
   "org.mockito" %% "mockito-scala" % "1.17.14" % Test,
-  "org.scalatest" %% "scalatest" % "3.2.17" % Test
+  "org.scalatest" %% "scalatest" % "3.0.8" % Test
 )
 
 resolvers += "Maven Central" at "https://repo1.maven.org/maven2/"
