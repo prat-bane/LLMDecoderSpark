@@ -124,7 +124,7 @@ model {
 
 spark {
   appName = "Spark LLM"
-  master = "yarn"
+  master = "local[*]"
   jars = "s3://sparkllmbucket/jar/LLMDecoderSpark-assembly-0.1.0-SNAPSHOT.jar"
   hadoop {
     fs {
@@ -162,6 +162,15 @@ paths {
 data {
   windowSize = 64
   stride = 32
+}
+
+metrics {
+  similarityThreshold = 0.05
+}
+
+trainingMaster{
+   avgFreq=5
+   workerPreFetchNumBatches=2
 }
 
 ```
