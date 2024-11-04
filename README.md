@@ -107,7 +107,7 @@ sbt clean compile test
 
 ### Running the spark job
 
-1) Run the SlidingWindowUtil class.
+1) Run the SlidingWindowUtil class. It takes one argument which is the path to the tokenids.txt file which is present in src/main/resources/tokenids.txt
    
 
 #### Configuration file
